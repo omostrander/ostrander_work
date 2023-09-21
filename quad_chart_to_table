@@ -1,0 +1,137 @@
+import pdfplumber
+import pandas as pd
+import glob
+import re
+from datetime import datetime
+
+
+
+
+
+def get_pdf_text(pdf):
+    all_text = ""
+    with pdfplumber.open(pdf) as pdf:
+        for i, page in enumerate(pdf.pages):
+            if i == 0: 
+                continue
+            text = page.extract_text()
+            if text: 
+                all_text += '\n' + text
+    return all_text
+
+def get_money(string):
+    prefix = '$'
+    amounts = []
+    start_search_index = 0
+    while True:
+        try:
+            start_index = string.index(prefix, start_search_index) + len(prefix)
+            end_index = string.index('\n', start_index)
+            amount = string[start_index:end_index]
+            amounts.append(amount)
+            start_search_index = end_index
+        except ValueError:
+            break
+    if not amounts:
+        return 'Contract Amount Not Found'
+    amounts = [i.split(' ')[0] for i in amounts] 
+    numbers = []
+    for amount in amounts:
+        try:
+            a = list(filter(lambda i: i.isdigit() or i in ['.'], amount))
+            b = ''.join(a)
+            numbers.append(float(b))
+        except:
+            pass
+    return max(numbers)
+
+def get_contract_num(string):
+    try:
+        start = '\nPage 2'
+        end = '\n'
+        start_index = string.index(start)
+        end_index = string.rfind(end, 0, start_index)
+        if end_index == -1:
+            text_before = string[:start_index]
+        else:
+            contract_num = string[end_index+1:start_index]
+    except:
+        return 'No Contract Number Found'
+    return contract_num
+
+def get_pdf_text(path):
+    all_text = ""
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            all_text += '\n' + text
+    return all_text
+
+def get_period_of_performance(string):
+    pop_full_index = string.find('Period of Performance')
+    pop_short_index = string.find('POP')
+    
+    def extract_dates(substring):
+        dates_found = re.findall(r'(?i)\b\d{1,2}[-\s](?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[-\s]\d{4}\b', substring)
+        date_objs = []
+        for date in dates_found:
+            try:
+                date_obj = datetime.strptime(date, "%d-%b-%Y").date()
+                date_objs.append(date_obj)
+            except ValueError:
+                pass
+            try:
+                date_obj = datetime.strptime(date, "%d %b %Y").date()
+                date_objs.append(date_obj)
+            except ValueError:
+                pass
+        return date_objs
+    full_dates = extract_dates(string[max(0, pop_full_index - 50): pop_full_index + 150]) if pop_full_index != -1 else []
+    short_dates = extract_dates(string[max(0, pop_short_index - 50): pop_short_index + 150]) if pop_short_index != -1 else []
+    if full_dates and short_dates:
+        earliest_full = min(full_dates)
+        earliest_short = min(short_dates)
+        if earliest_full <= earliest_short:
+            dates = full_dates
+        else:
+            dates = short_dates
+    elif full_dates:
+        dates = full_dates
+    elif short_dates:
+        dates = short_dates
+    else:
+        dates = extract_dates(string)
+    if not dates:
+        return {'earliest_date': 'No Date Found',
+                'latest_date': 'No Date Found'}
+    earliest_date = min(dates)
+    latest_date = max(dates)
+    if earliest_date == latest_date:
+        return {
+            'earliest_date': str(earliest_date),
+            'latest_date': 'No end date found'
+        }
+    return {
+        'earliest_date': str(earliest_date),
+        'latest_date': str(latest_date)
+    }
+
+def df_w_connum_money(string):
+    money = get_money(string)
+    contract_number = get_contract_num(string)
+    dic = {'contract_number':[contract_number], 'contract_cost': [money]}
+    df = pd.DataFrame.from_dict(dic)
+    pop = get_period_of_performance(string)
+    dic = {
+        'contract_number': [contract_number],
+        'contract_cost': [money],
+        'start_pop(yyyy/mm/dd)': [pop['earliest_date']],
+        'end_pop(yyyy/mm/dd)': [pop['latest_date']]
+    }
+    df = pd.DataFrame.from_dict(dic)
+    return df
+
+def get_info(pdf):
+    text = get_pdf_text(pdf)
+    df = df_w_connum_money(text)
+    return df
